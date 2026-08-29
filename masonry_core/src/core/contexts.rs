@@ -586,8 +586,19 @@ impl AccessCtx<'_> {
 
     /// Returns an id which is guaranteed not to collide with [`WidgetId`]s or with previous ids returned by this function.
     pub fn next_node_id() -> NodeId {
-        // TODO - Return from a pool disjoint from widget ids.
-        WidgetId::next().into()
+        thread_local! {
+            static NEXT_ACCESS_ID: std::cell::Cell<u64> = const {
+                std::cell::Cell::new(u64::MAX)
+            };
+        }
+        NEXT_ACCESS_ID.with(|next| {
+            let id = next.get();
+            next.set(
+                id.checked_sub(1)
+                    .expect("accessibility node id space exhausted"),
+            );
+            NodeId(id)
+        })
     }
 }
 
@@ -2004,18 +2015,7 @@ impl_context_method!(
                 return;
             }
 
-            // FIXME - Add LayerId type and use that instead.
-            let layer_id = fallback_widget.id;
-
-            let layers = self
-                .global_state
-                .attached_layers
-                .entry(self.widget_id())
-                .or_default();
-            if let Some(prev) = layers.insert(TypeId::of::<W>(), layer_id) {
-                self.global_state
-                    .emit_signal(RenderRootSignal::RemoveLayer(prev));
-            }
+            fallback_widget.attached_to = Some((self.widget_id(), TypeId::of::<W>()));
             self.global_state.emit_signal(RenderRootSignal::NewLayer(
                 layer_type,
                 fallback_widget.erased(),
@@ -2090,12 +2090,13 @@ impl RegisterCtx<'_> {
     pub fn register_child(&mut self, child: &mut WidgetPod<impl Widget + ?Sized>) {
         let Some(NewWidget {
             widget,
-            id,
             options,
             properties,
             property_stack_id,
             classes,
             tag,
+            id_callback,
+            attached_to,
             action_type,
             #[cfg(debug_assertions)]
             action_type_name,
@@ -2104,20 +2105,33 @@ impl RegisterCtx<'_> {
             return;
         };
 
-        #[cfg(debug_assertions)]
-        {
-            self.registered_ids.push(id);
-        }
+        let raw_id = self.children.insert_child(|raw_id| {
+            let id = WidgetId::from_raw(raw_id);
+            let state = WidgetState::new(
+                id,
+                widget.short_type_name(),
+                options,
+                action_type,
+                property_stack_id,
+                #[cfg(debug_assertions)]
+                action_type_name,
+            );
 
-        let state = WidgetState::new(
-            id,
-            widget.short_type_name(),
-            options,
-            action_type,
-            property_stack_id,
-            #[cfg(debug_assertions)]
-            action_type_name,
-        );
+            WidgetArenaNode {
+                widget: widget.as_box_dyn(),
+                state,
+                properties,
+                class_set: ClassSet {
+                    classes,
+                    ..ClassSet::default()
+                },
+            }
+        });
+        let id = WidgetId::from_raw(raw_id);
+        child.set_id(id);
+
+        #[cfg(debug_assertions)]
+        self.registered_ids.push(id);
 
         if let Some(tag) = tag {
             let entry = self.global_state.widget_tags.entry(tag);
@@ -2129,17 +2143,16 @@ impl RegisterCtx<'_> {
 
             vacant_entry.insert(id);
         }
-
-        let node = WidgetArenaNode {
-            widget: widget.as_box_dyn(),
-            state,
-            properties,
-            class_set: ClassSet {
-                classes,
-                ..ClassSet::default()
-            },
-        };
-        self.children.insert(id, node);
+        if let Some(callback) = id_callback {
+            callback(id);
+        }
+        if let Some((owner, layer_type)) = attached_to {
+            let layers = self.global_state.attached_layers.entry(owner).or_default();
+            if let Some(previous) = layers.insert(layer_type, id) {
+                self.global_state
+                    .emit_signal(RenderRootSignal::RemoveLayer(previous));
+            }
+        }
     }
 }
 

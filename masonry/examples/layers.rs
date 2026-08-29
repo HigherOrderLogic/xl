@@ -43,7 +43,6 @@ impl AppDriver for Driver {
 struct OverlayBox {
     child: WidgetPod<dyn Widget>,
     overlayer: Box<dyn Fn() -> (NewWidget<dyn Widget>, LayerType)>,
-    layer_root_id: Option<WidgetId>,
     last_mouse_move: Option<Instant>,
     last_cursor_pos: Point,
 }
@@ -58,7 +57,6 @@ impl OverlayBox {
         Self {
             child: child.erased().to_pod(),
             overlayer,
-            layer_root_id: None,
             last_mouse_move: None,
             last_cursor_pos: Point::ZERO,
         }
@@ -92,7 +90,6 @@ impl Widget for OverlayBox {
             let now = Instant::now();
             if now.duration_since(last_mouse_move) > Duration::from_millis(300) {
                 let (overlay, layer_type) = (self.overlayer)();
-                self.layer_root_id = Some(overlay.id());
                 let layer_pos = self.last_cursor_pos + Vec2::new(5., -25.);
                 ctx.create_layer(layer_type, overlay, layer_pos);
             } else {

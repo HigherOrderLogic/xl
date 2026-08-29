@@ -1,12 +1,14 @@
 // Copyright 2026 the Xilem Authors
 // SPDX-License-Identifier: Apache-2.0
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use std::assert_matches;
 
-use crate::core::{ChildrenIds, Widget};
+use crate::core::{ChildrenIds, Widget, WidgetTag};
 use crate::kurbo::Point;
 use crate::layout::{AsUnit, LayoutSize, Length};
 use crate::properties::Dimensions;
@@ -25,6 +27,7 @@ fn action_source_removed() {
     #[derive(Debug)]
     struct ArbitraryAction;
 
+    let action_source_tag = WidgetTag::unique();
     let action_source = ModularWidget::new(ok.clone())
         .pointer_event_fn(|ok, ctx, _, _| {
             // Send an action but crucially don't mark the pointer event as handled,
@@ -34,8 +37,8 @@ fn action_source_removed() {
         })
         .prepare()
         .with_props(Dimensions::fixed(50.px(), 50.px()))
+        .with_tag(action_source_tag)
         .to_pod();
-    let action_source_id = action_source.id();
 
     let parent = ModularWidget::new(Some(action_source))
         .pointer_event_fn(|child, ctx, _, _| {
@@ -80,6 +83,7 @@ fn action_source_removed() {
         .prepare();
 
     let mut harness = TestHarness::create(test_property_set(), parent);
+    let action_source_id = harness.get_widget(action_source_tag).id();
 
     harness.mouse_move_to(action_source_id);
 
@@ -95,41 +99,61 @@ fn action_propagation() {
     #[derive(Debug)]
     struct TranslatedAction;
 
-    let button = Button::with_text("Click me!").prepare();
-    let button_id = button.id();
+    let button_id = Cell::new(None).into();
+    let button_id_target = Rc::clone(&button_id);
+    let button = Button::with_text("Click me!")
+        .prepare()
+        .with_id_callback(move |id| button_id_target.set(Some(id)));
 
+    let expected_button_id = Rc::clone(&button_id);
     let parent1 = ModularWidget::new_parent(button)
         .action_fn(move |_, _, _, action, source| {
             // We expect only the button press action
-            assert_eq!(source, button_id, "unexpected action source");
+            assert_eq!(
+                source,
+                expected_button_id.get().unwrap(),
+                "unexpected action source"
+            );
             assert!(action.is::<ButtonPress>(), "unexpected action type");
         })
         .prepare();
 
+    let expected_button_id = Rc::clone(&button_id);
+    let parent2_id = Cell::new(None).into();
+    let parent2_id_target = Rc::clone(&parent2_id);
     let parent2 = ModularWidget::new_parent(parent1)
         .action_fn(move |_, ctx, _, action, source| {
             // We expect only the button press action
-            assert_eq!(source, button_id, "unexpected action source");
+            assert_eq!(
+                source,
+                expected_button_id.get().unwrap(),
+                "unexpected action source"
+            );
             assert!(action.is::<ButtonPress>(), "unexpected action type");
             // Mark the button press as handled to stop its propagation
             ctx.set_handled();
             // Translate it into our own action
             ctx.submit_untyped_action(Box::new(TranslatedAction));
         })
-        .prepare();
-    let parent2_id = parent2.id();
+        .prepare()
+        .with_id_callback(move |id| parent2_id_target.set(Some(id)));
 
+    let expected_parent2_id = Rc::clone(&parent2_id);
     let parent3 = ModularWidget::new_parent(parent2)
         .action_fn(move |_, _, _, action, source| {
             // We expect only the translated action
-            assert_eq!(source, parent2_id, "unexpected action source");
+            assert_eq!(
+                source,
+                expected_parent2_id.get().unwrap(),
+                "unexpected action source"
+            );
             assert!(action.is::<TranslatedAction>(), "unexpected action type");
         })
         .prepare();
 
     let mut harness = TestHarness::create(test_property_set(), parent3);
 
-    harness.mouse_click_on(button_id, None);
+    harness.mouse_click_on(button_id.get().unwrap(), None);
 
     // Only the translated action should reach the app driver
     assert_matches!(

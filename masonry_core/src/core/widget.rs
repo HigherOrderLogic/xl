@@ -4,7 +4,6 @@
 use std::any::{Any, TypeId};
 use std::fmt::{Debug, Display};
 use std::num::NonZeroU64;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use accesskit::{Node, Role};
 use kurbo::{Axis, Point, Size};
@@ -45,6 +44,10 @@ impl WidgetId {
     /// A serialized representation of the `WidgetId` for debugging purposes.
     pub fn trace(self) -> DisplayValue<Self> {
         tracing::field::display(self)
+    }
+
+    pub(crate) fn from_raw(raw: u64) -> Self {
+        Self(NonZeroU64::new(raw).expect("tree arena ids are non-zero"))
     }
 }
 
@@ -639,20 +642,6 @@ pub fn find_widget_under_pointer<'c>(
 pub trait AllowRawMut: Widget {}
 
 impl WidgetId {
-    /// Allocates a new, unique `WidgetId`.
-    ///
-    /// All widgets are assigned ids automatically; you should only create
-    /// an explicit id if you need to know it ahead of time, for instance
-    /// if you want two sibling widgets to know each others' ids.
-    ///
-    /// You must ensure that a given `WidgetId` is only ever used for one
-    /// widget at a time.
-    pub(crate) fn next() -> Self {
-        static WIDGET_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
-        let id = WIDGET_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
-        Self(id.try_into().unwrap())
-    }
-
     /// Returns the integer value of the `WidgetId`.
     pub fn to_raw(self) -> u64 {
         self.0.into()

@@ -321,7 +321,7 @@ where
             return;
         };
 
-        let id_path = widget_path.clone();
+        let id_path = widget_path;
         let message = DynMessage(action);
 
         let message_result = self.dispatch_message(window_id, masonry_ctx, id_path, message);

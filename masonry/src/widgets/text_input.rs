@@ -383,6 +383,8 @@ impl Widget for TextInput {
 #[cfg(test)]
 mod tests {
     use masonry_testing::TestHarnessParams;
+    use std::cell::Cell;
+    use std::rc::Rc;
 
     use super::*;
     use crate::core::{StyleProperty, TextEvent};
@@ -448,10 +450,21 @@ mod tests {
 
     #[test]
     fn placeholder_is_exposed_on_text_area_accessibility_node() {
-        let text_input = NewWidget::new(TextInput::new("").with_placeholder("Search"));
-        let text_area_id = text_input.widget.area_pod().id();
-        let placeholder_id = text_input.widget.placeholder.id();
+        let text_area_id = Cell::new(None).into();
+        let text_area_id_target = Rc::clone(&text_area_id);
+        let text_area = TextArea::new_editable("")
+            .prepare()
+            .with_id_callback(move |id| text_area_id_target.set(Some(id)));
+        let mut text_input = TextInput::from_text_area(text_area).with_placeholder("Search");
+        let placeholder_id = Cell::new(None).into();
+        let placeholder_id_target = Rc::clone(&placeholder_id);
+        text_input
+            .placeholder
+            .set_id_callback(move |id| placeholder_id_target.set(Some(id)));
+        let text_input = NewWidget::new(text_input);
         let mut harness = TestHarness::create_with(test_property_set(), text_input, HARNESS_PARAMS);
+        let text_area_id = text_area_id.get().unwrap();
+        let placeholder_id = placeholder_id.get().unwrap();
 
         let text_input_node = harness.access_node(harness.root_id()).unwrap();
         assert_eq!(text_input_node.data().placeholder(), None);

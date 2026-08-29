@@ -13,7 +13,7 @@ use crate::core::{PropertySet, PropertyStackId, Widget, WidgetId, WidgetTag, Wid
 /// but rather contain a `WidgetPod`, which has additional state needed
 /// for layout and for the widget to participate in event flow.
 pub struct WidgetPod<W: Widget + ?Sized> {
-    id: WidgetId,
+    id: Option<WidgetId>,
     inner: WidgetPodInner<W>,
 }
 
@@ -29,7 +29,6 @@ pub struct WidgetPod<W: Widget + ?Sized> {
 pub struct NewWidget<W: ?Sized> {
     /// The widget we're going to add.
     pub widget: Box<W>,
-    pub(crate) id: WidgetId,
     pub(crate) action_type: TypeId,
     #[cfg(debug_assertions)]
     pub(crate) action_type_name: &'static str,
@@ -44,6 +43,8 @@ pub struct NewWidget<W: ?Sized> {
     pub classes: HashSet<String>,
 
     pub(crate) tag: Option<WidgetTagInner>,
+    pub(crate) id_callback: Option<Box<dyn FnOnce(WidgetId)>>,
+    pub(crate) attached_to: Option<(WidgetId, TypeId)>,
 }
 
 impl<W: Widget + ?Sized> std::fmt::Debug for WidgetPod<W> {
@@ -68,7 +69,6 @@ impl<W: Widget + ?Sized> std::fmt::Debug for NewWidget<W> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NewWidget")
             .field("widget_type", &self.widget.short_type_name())
-            .field("id", &self.id)
             .field("options", &self.options)
             .field("tag", &self.tag)
             .field("classes", &self.classes)
@@ -108,7 +108,6 @@ impl<W: Widget> NewWidget<W> {
     pub fn new(inner: W) -> Self {
         Self {
             widget: Box::new(inner),
-            id: WidgetId::next(),
             action_type: TypeId::of::<W::Action>(),
             #[cfg(debug_assertions)]
             action_type_name: std::any::type_name::<W::Action>(),
@@ -117,6 +116,8 @@ impl<W: Widget> NewWidget<W> {
             property_stack_id: None,
             classes: HashSet::new(),
             tag: None,
+            id_callback: None,
+            attached_to: None,
         }
     }
 }
@@ -127,7 +128,6 @@ impl<W: Widget + ?Sized> NewWidget<W> {
     pub fn erased(self) -> NewWidget<dyn Widget> {
         NewWidget {
             widget: self.widget.as_box_dyn(),
-            id: self.id,
             action_type: self.action_type,
             #[cfg(debug_assertions)]
             action_type_name: self.action_type_name,
@@ -136,6 +136,8 @@ impl<W: Widget + ?Sized> NewWidget<W> {
             property_stack_id: self.property_stack_id,
             tag: self.tag,
             classes: self.classes,
+            id_callback: self.id_callback,
+            attached_to: self.attached_to,
         }
     }
 
@@ -152,6 +154,25 @@ impl<W: Widget + ?Sized> NewWidget<W> {
     pub fn with_erased_tag(mut self, tag: WidgetTag<dyn Widget>) -> Self {
         self.tag = Some(tag.inner);
         self
+    }
+
+    /// Runs `callback` when this widget is assigned its id during insertion.
+    #[doc(hidden)]
+    pub fn with_id_callback(mut self, callback: impl FnOnce(WidgetId) + 'static) -> Self {
+        self.set_id_callback(callback);
+        self
+    }
+
+    /// Adds a callback run when this widget is assigned its id during insertion.
+    #[doc(hidden)]
+    pub fn set_id_callback(&mut self, callback: impl FnOnce(WidgetId) + 'static) {
+        let old_callback = self.id_callback.take();
+        self.id_callback = Some(Box::new(move |id| {
+            if let Some(callback) = old_callback {
+                callback(id);
+            }
+            callback(id);
+        }));
     }
 
     /// Applies the given [properties] to this widget.
@@ -211,14 +232,9 @@ impl<W: Widget + ?Sized> NewWidget<W> {
     /// Creates a `WidgetPod` which will be added to the widget tree.
     pub fn to_pod(self) -> WidgetPod<W> {
         WidgetPod {
-            id: self.id,
+            id: None,
             inner: WidgetPodInner::Create(Box::new(self)),
         }
-    }
-
-    /// Returns the id of the widget.
-    pub fn id(&self) -> WidgetId {
-        self.id
     }
 }
 
@@ -235,6 +251,15 @@ impl<W: Widget + ?Sized> WidgetPod<W> {
         matches!(self.inner, WidgetPodInner::Create(_))
     }
 
+    /// Adds a callback run when this pending pod is assigned its id.
+    #[doc(hidden)]
+    pub fn set_id_callback(&mut self, callback: impl FnOnce(WidgetId) + 'static) {
+        match &mut self.inner {
+            WidgetPodInner::Create(widget) => widget.set_id_callback(callback),
+            WidgetPodInner::Inserted => panic!("widget has already been inserted into a tree"),
+        }
+    }
+
     pub(crate) fn take_inner(&mut self) -> Option<NewWidget<W>> {
         match std::mem::replace(&mut self.inner, WidgetPodInner::Inserted) {
             WidgetPodInner::Create(widget) => Some(*widget),
@@ -242,8 +267,14 @@ impl<W: Widget + ?Sized> WidgetPod<W> {
         }
     }
 
+    pub(crate) fn set_id(&mut self, id: WidgetId) {
+        assert!(self.id.replace(id).is_none(), "widget already has an id");
+    }
+
     /// Returns the id of the widget.
     pub fn id(&self) -> WidgetId {
-        self.id
+        self.id.expect(
+            "widget has not been inserted into a tree; did not call RegisterCtx::register_child()",
+        )
     }
 }

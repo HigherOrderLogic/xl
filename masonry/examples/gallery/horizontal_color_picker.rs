@@ -1,6 +1,9 @@
 // Copyright 2026 the Xilem Authors and the Druid Authors
 // SPDX-License-Identifier: Apache-2.0
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use masonry::core::{
     AccessCtx, ActionCtx, ChildrenIds, ErasedAction, LayoutCtx, MeasureCtx, PaintCtx,
     PropertiesMut, PropertiesRef, RegisterCtx, Widget, WidgetId, WidgetMut, WidgetPod,
@@ -61,33 +64,37 @@ pub(crate) struct ColorSelected {
 pub(crate) struct HorizontalColorPicker {
     color: Color,
     widget: WidgetPod<Flex>,
-    sliders: [(Component, WidgetId); 4],
-    preview_id: WidgetId,
+    sliders: [(Component, Rc<Cell<Option<WidgetId>>>); 4],
+    preview_id: Rc<Cell<Option<WidgetId>>>,
 }
 
 impl HorizontalColorPicker {
     pub(crate) fn new(color: Color) -> Self {
         let mut body = Flex::row().cross_axis_alignment(CrossAxisAlignment::Stretch);
 
-        let sliders: [(Component, WidgetId); 4] = Component::ALL.map(|component| {
+        let sliders = Component::ALL.map(|component| {
+            let id = Cell::new(None).into();
+            let id_target = Rc::clone(&id);
             let widget = Slider::new(0., 1., component.get(&color) as f64)
                 .prepare()
                 .with_props(TrackColor {
                     active: component.visual_color(),
                     ..Default::default()
-                });
-            let id = widget.id();
+                })
+                .with_id_callback(move |id| id_target.set(Some(id)));
             body = std::mem::replace(&mut body, Flex::row())
                 .with(widget, 1.)
                 .with_fixed_spacer((CONTENT_GAP.get() / 2.0).px());
             (component, id)
         });
 
+        let preview_id = Cell::new(None).into();
+        let preview_id_target = Rc::clone(&preview_id);
         let preview = SizedBox::empty()
             .width(Length::const_px(20.0))
             .prepare()
-            .with_props(Background::Color(color));
-        let preview_id = preview.id();
+            .with_props(Background::Color(color))
+            .with_id_callback(move |id| preview_id_target.set(Some(id)));
         body = body.with_fixed(preview);
 
         Self {
@@ -102,14 +109,15 @@ impl HorizontalColorPicker {
     pub(crate) fn set_color(this: &mut WidgetMut<'_, Self>, color: Color) {
         for (component, wid) in this.widget.sliders.iter() {
             let value = component.get(&color);
-            this.ctx.mutate_later(*wid, move |mut widget| {
-                if let Some(mut slider_widget) = widget.try_downcast::<Slider>() {
-                    Slider::set_value(&mut slider_widget, value as f64);
-                }
-            });
+            this.ctx
+                .mutate_later(wid.get().unwrap(), move |mut widget| {
+                    if let Some(mut slider_widget) = widget.try_downcast::<Slider>() {
+                        Slider::set_value(&mut slider_widget, value as f64);
+                    }
+                });
         }
         this.ctx
-            .mutate_later(this.widget.preview_id, move |mut widget| {
+            .mutate_later(this.widget.preview_id.get().unwrap(), move |mut widget| {
                 widget.insert_prop(Background::Color(color));
             });
     }
@@ -152,7 +160,7 @@ impl Widget for HorizontalColorPicker {
             && let Some(component) = self
                 .sliders
                 .iter()
-                .find(|(_, wid)| source == *wid)
+                .find(|(_, wid)| Some(source) == wid.get())
                 .map(|(comp, _)| *comp)
         {
             #[allow(
@@ -162,7 +170,7 @@ impl Widget for HorizontalColorPicker {
             component.update(&mut self.color, *value as f32);
             ctx.submit_action::<Self::Action>(ColorSelected { color: self.color });
             let color = self.color;
-            ctx.mutate_later(self.preview_id, move |mut widget| {
+            ctx.mutate_later(self.preview_id.get().unwrap(), move |mut widget| {
                 widget.insert_prop(Background::Color(color));
             });
             ctx.set_handled();

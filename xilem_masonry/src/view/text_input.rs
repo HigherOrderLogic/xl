@@ -253,15 +253,12 @@ impl<State: 'static, Action: 'static> View<State, Action, ViewCtx> for TextInput
             props.insert(ContentColor { color });
         }
 
-        let text_input =
-            widgets::TextInput::from_text_area(NewWidget::new(text_area).with_props(props))
-                .with_text_alignment(self.text_alignment)
-                .with_clip(self.clip)
-                .with_placeholder(self.placeholder.clone());
-
-        // Ensure that the actions from the *inner* TextArea get routed correctly.
-        let id = text_input.area_pod().id();
-        ctx.record_action_source(id);
+        let mut text_area = NewWidget::new(text_area).with_props(props);
+        ctx.record_new_widget_action_source(&mut text_area);
+        let text_input = widgets::TextInput::from_text_area(text_area)
+            .with_text_alignment(self.text_alignment)
+            .with_clip(self.clip)
+            .with_placeholder(self.placeholder.clone());
 
         let mut pod = ctx.create_pod(text_input);
         pod.new_widget.options.disabled = self.disabled;

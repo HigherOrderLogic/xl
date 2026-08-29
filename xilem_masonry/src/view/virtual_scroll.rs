@@ -229,13 +229,13 @@ where
     fn build(&self, ctx: &mut ViewCtx, _: &mut State) -> (Self::Element, Self::ViewState) {
         // TODO: How does the anchor interact with Xilem?
         // Setting that seems like an imperative action?
-        let pod = Pod::new(
+        let mut pod = Pod::new(
             widgets::VirtualScroll::new(self.anchor_index.unwrap_or(0), self.len)
                 .with_start_end(self.start_at, self.end_at)
                 .with_direction(self.direction)
                 .with_scrolling(self.scrolling),
         );
-        ctx.record_action_source(pod.new_widget.id());
+        ctx.record_new_widget_action_source(&mut pod.new_widget);
         (
             pod,
             private::VirtualScrollState {

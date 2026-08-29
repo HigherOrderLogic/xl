@@ -9,6 +9,7 @@
 use alloc::vec::Vec;
 
 use hashbrown::HashMap;
+use slotmap::{DefaultKey, Key, SlotMap};
 
 use crate::NodeId;
 
@@ -29,6 +30,7 @@ struct TreeNode<T> {
 pub struct TreeArena<T> {
     roots: HashMap<NodeId, TreeNode<T>>,
     parents_map: HashMap<NodeId, Option<NodeId>>,
+    slots: SlotMap<DefaultKey, ()>,
 }
 
 /// A reference type giving shared access to an arena item and its children.
@@ -85,6 +87,7 @@ pub struct ArenaMutList<'arena, T> {
     parent_id: Option<NodeId>,
     children: &'arena mut HashMap<NodeId, TreeNode<T>>,
     parents_map: ArenaMapMut<'arena>,
+    slots: &'arena mut SlotMap<DefaultKey, ()>,
 }
 
 /// A shared reference to the parent father map
@@ -129,6 +132,7 @@ impl<T> TreeArena<T> {
         Self {
             roots: HashMap::new(),
             parents_map: HashMap::new(),
+            slots: SlotMap::new(),
         }
     }
 
@@ -164,6 +168,7 @@ impl<T> TreeArena<T> {
             parents_map: ArenaMapMut {
                 parents_map: &mut self.parents_map,
             },
+            slots: &mut self.slots,
         }
     }
 
@@ -284,6 +289,7 @@ impl<T> TreeNode<T> {
         &'arena mut self,
         parent_id: Option<NodeId>,
         parents_map: &'arena mut HashMap<NodeId, Option<NodeId>>,
+        slots: &'arena mut SlotMap<DefaultKey, ()>,
     ) -> ArenaMut<'arena, T> {
         ArenaMut {
             parent_id,
@@ -292,6 +298,7 @@ impl<T> TreeNode<T> {
                 parent_id: Some(self.id),
                 children: &mut self.children,
                 parents_map: ArenaMapMut { parents_map },
+                slots,
             },
         }
     }
@@ -390,6 +397,35 @@ impl<T> ArenaMut<'_, T> {
 }
 
 impl<'arena, T> ArenaMutList<'arena, T> {
+    /// Inserts a child with a caller-provided id.
+    ///
+    /// Prefer [`insert_child`](Self::insert_child) when the id does not need to
+    /// come from an external key space.
+    #[deprecated(note = "use insert_child to allocate a generational id")]
+    pub fn insert(&mut self, child_id: impl Into<NodeId>, value: T) -> ArenaMut<'_, T> {
+        let child_id = child_id.into();
+        assert!(
+            !self.parents_map.parents_map.contains_key(&child_id),
+            "Key already present"
+        );
+        self.parents_map
+            .parents_map
+            .insert(child_id, self.parent_id);
+        self.children.insert(
+            child_id,
+            TreeNode {
+                id: child_id,
+                item: value,
+                children: HashMap::new(),
+            },
+        );
+        self.children.get_mut(&child_id).unwrap().arena_mut(
+            self.parent_id,
+            self.parents_map.parents_map,
+            self.slots,
+        )
+    }
+
     /// Returns `true` if the list has an element with the given id.
     pub fn has(&self, id: impl Into<NodeId>) -> bool {
         let id = id.into();
@@ -409,7 +445,7 @@ impl<'arena, T> ArenaMutList<'arena, T> {
         let id = id.into();
         self.children
             .get_mut(&id)
-            .map(|child| child.arena_mut(self.parent_id, self.parents_map.parents_map))
+            .map(|child| child.arena_mut(self.parent_id, self.parents_map.parents_map, self.slots))
     }
 
     /// Returns a shared handle to the element of the list with the given id.
@@ -431,29 +467,25 @@ impl<'arena, T> ArenaMutList<'arena, T> {
         let id = id.into();
         self.children
             .get_mut(&id)
-            .map(|child| child.arena_mut(self.parent_id, self.parents_map.parents_map))
+            .map(|child| child.arena_mut(self.parent_id, self.parents_map.parents_map, self.slots))
     }
 
-    // TODO - Remove the child_id argument once creation of widgets is figured out.
-    // Return the id instead.
-    // TODO - Add #[must_use]
     /// Inserts a child into the tree under the common parent of this list's items.
     ///
     /// If this list was returned from [`TreeArena::roots_mut()`], create a new tree root.
     ///
-    /// The new child will have the given id.
-    ///
-    /// Returns a handle to the new child.
-    ///
-    /// # Panics
-    ///
-    /// If the arena already contains an item with the given id.
-    pub fn insert(&mut self, child_id: impl Into<NodeId>, value: T) -> ArenaMut<'_, T> {
-        let child_id = child_id.into();
-        assert!(
-            !self.parents_map.parents_map.contains_key(&child_id),
-            "Key already present"
-        );
+    /// The value builder receives the newly allocated id. Returns that id.
+    #[must_use]
+    pub fn insert_child(&mut self, value: impl FnOnce(NodeId) -> T) -> NodeId {
+        let child_id = loop {
+            let key = self.slots.insert(());
+            let id = key.data().as_ffi();
+            if !self.parents_map.parents_map.contains_key(&id) {
+                break id;
+            }
+            self.slots.remove(key);
+        };
+        let value = value(child_id);
         self.parents_map
             .parents_map
             .insert(child_id, self.parent_id);
@@ -467,10 +499,7 @@ impl<'arena, T> ArenaMutList<'arena, T> {
             },
         );
 
-        self.children
-            .get_mut(&child_id)
-            .unwrap()
-            .arena_mut(self.parent_id, self.parents_map.parents_map)
+        child_id
     }
 
     // TODO - How to handle when a subtree is removed?
@@ -491,14 +520,19 @@ impl<'arena, T> ArenaMutList<'arena, T> {
         fn remove_children_from_map<I>(
             node: &TreeNode<I>,
             parents_map: &mut HashMap<NodeId, Option<NodeId>>,
+            slots: &mut SlotMap<DefaultKey, ()>,
         ) {
             for child in &node.children {
-                remove_children_from_map(child.1, parents_map);
+                remove_children_from_map(child.1, parents_map, slots);
             }
             parents_map.remove(&node.id);
+            let key = DefaultKey::from(slotmap::KeyData::from_ffi(node.id));
+            if slots.contains_key(key) {
+                slots.remove(key);
+            }
         }
 
-        remove_children_from_map(&child, self.parents_map.parents_map);
+        remove_children_from_map(&child, self.parents_map.parents_map, self.slots);
 
         Some(child.item)
     }
@@ -520,6 +554,7 @@ impl<'arena, T> ArenaMutList<'arena, T> {
             parent_id: self.parent_id,
             children: &mut *self.children,
             parents_map: self.parents_map.reborrow_mut(),
+            slots: &mut *self.slots,
         }
     }
 
@@ -566,7 +601,7 @@ impl<'arena, T> ArenaMutList<'arena, T> {
         }
 
         let node = node_children.get_mut(&id)?;
-        Some(node.arena_mut(*parent_id, &mut *self.parents_map.parents_map))
+        Some(node.arena_mut(*parent_id, &mut *self.parents_map.parents_map, self.slots))
     }
 
     /// No-op. Added for parity with unsafe implementation.

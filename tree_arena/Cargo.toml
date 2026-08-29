@@ -28,6 +28,7 @@ safe_tree = []
 
 [dependencies]
 hashbrown.workspace = true
+slotmap.workspace = true
 
 [lints]
 workspace = true

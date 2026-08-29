@@ -3,7 +3,35 @@
 
 //! Tests for the [`TreeArena`].
 
+#![allow(deprecated, reason = "legacy explicit-id API remains covered")]
+
 use tree_arena::*;
+
+#[test]
+fn insert_child_allocates_generational_ids() {
+    let mut tree = TreeArena::new();
+    let (root_id, child_id) = {
+        let mut roots = tree.roots_mut();
+        let root_id = roots.insert_child(|id| id);
+        let mut root = roots.item_mut(root_id).unwrap();
+        assert_eq!(*root.item, root_id);
+
+        let child_id = root.children.insert_child(|id| id);
+        let child = root.children.item_mut(child_id).unwrap();
+        assert_eq!(*child.item, child_id);
+        assert_ne!(root_id, child_id);
+
+        assert_eq!(roots.remove(root_id), Some(root_id));
+        (root_id, child_id)
+    };
+    assert!(tree.find(root_id).is_none());
+    assert!(tree.find(child_id).is_none());
+
+    let mut roots = tree.roots_mut();
+    let replacement_id = roots.insert_child(|id| id);
+    assert_ne!(replacement_id, root_id);
+    assert_ne!(replacement_id, child_id);
+}
 
 #[test]
 fn arena_insertions() {

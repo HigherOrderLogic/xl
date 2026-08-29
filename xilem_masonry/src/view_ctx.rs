@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::any::TypeId;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::Arc;
 
-use masonry::core::{FromDynWidget, Property, Widget, WidgetId, WidgetMut};
+use masonry::core::{FromDynWidget, NewWidget, Property, Widget, WidgetId, WidgetMut};
 
 use crate::Pod;
 use crate::core::{Environment, RawProxy, ViewId, ViewPathTracker};
@@ -15,7 +17,7 @@ pub struct ViewCtx {
     /// The map from a widgets id to its position in the View tree.
     ///
     /// This includes only the widgets which might send actions
-    widget_map: HashMap<WidgetId, Vec<ViewId>>,
+    widget_map: Rc<RefCell<HashMap<WidgetId, Vec<ViewId>>>>,
     id_path: Vec<ViewId>,
     proxy: Arc<dyn RawProxy>,
     runtime: Arc<tokio::runtime::Runtime>,
@@ -46,8 +48,8 @@ impl ViewCtx {
     /// Returns the list of ids of [`WidgetView`](crate::WidgetView)s that must be traversed to get the widget with the given id.
     ///
     /// Only applies to widgets on which [`Self::record_action_source`] was called.
-    pub fn get_id_path(&self, widget_id: WidgetId) -> Option<&Vec<ViewId>> {
-        self.widget_map.get(&widget_id)
+    pub fn get_id_path(&self, widget_id: WidgetId) -> Option<Vec<ViewId>> {
+        self.widget_map.borrow().get(&widget_id).cloned()
     }
 
     // TODO - Remove?
@@ -61,15 +63,27 @@ impl ViewCtx {
         &mut self,
         f: impl FnOnce(&mut Self) -> Pod<W>,
     ) -> Pod<W> {
-        let value = f(self);
-        self.record_action_source(value.new_widget.id());
+        let mut value = f(self);
+        self.record_new_widget_action_source(&mut value.new_widget);
         value
+    }
+
+    /// Records the view path once a pending widget is assigned its id.
+    pub fn record_new_widget_action_source<W: Widget + ?Sized>(
+        &mut self,
+        widget: &mut NewWidget<W>,
+    ) {
+        let path = self.id_path.clone();
+        let widget_map = Rc::clone(&self.widget_map);
+        widget.set_id_callback(move |id| {
+            widget_map.borrow_mut().insert(id, path);
+        });
     }
 
     /// Records that the actions from the widget `id` should be routed to this view.
     pub fn record_action_source(&mut self, id: WidgetId) {
         let path = self.id_path.clone();
-        self.widget_map.insert(id, path);
+        self.widget_map.borrow_mut().insert(id, path);
     }
 
     /// Removes this widget's id path from the routing map.
@@ -77,7 +91,7 @@ impl ViewCtx {
         &mut self,
         widget: WidgetMut<'_, W>,
     ) {
-        self.widget_map.remove(&widget.ctx.widget_id());
+        self.widget_map.borrow_mut().remove(&widget.ctx.widget_id());
     }
 
     /// Returns a reference to the app's tokio runtime.
@@ -141,7 +155,7 @@ impl ViewCtx {
     /// You almost never need to call this method unless you're building your own framework.
     pub fn new(proxy: Arc<dyn RawProxy>, runtime: Arc<tokio::runtime::Runtime>) -> Self {
         Self {
-            widget_map: HashMap::default(),
+            widget_map: RefCell::new(HashMap::default()).into(),
             id_path: Vec::new(),
             proxy,
             runtime,

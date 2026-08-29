@@ -11,6 +11,7 @@ use alloc::vec::Vec;
 use core::cell::UnsafeCell;
 
 use hashbrown::HashMap;
+use slotmap::{DefaultKey, Key, SlotMap};
 
 use crate::NodeId;
 
@@ -27,6 +28,8 @@ struct DataMap<T> {
     items: HashMap<NodeId, Box<UnsafeCell<TreeNode<T>>>>,
     /// The parent of each node, or `None` if it is the root
     parents: HashMap<NodeId, Option<NodeId>>,
+    /// Allocates generational node ids and tracks which ids are live.
+    slots: SlotMap<DefaultKey, ()>,
 }
 
 /// A container type for a tree of items.
@@ -126,6 +129,7 @@ impl<T> DataMap<T> {
         Self {
             items: HashMap::new(),
             parents: HashMap::new(),
+            slots: SlotMap::new(),
         }
     }
 
@@ -490,6 +494,29 @@ impl<T> ArenaMut<'_, T> {
 }
 
 impl<'arena, T> ArenaMutList<'arena, T> {
+    /// Inserts a child with a caller-provided id.
+    ///
+    /// Prefer [`insert_child`](Self::insert_child) when the id does not need to
+    /// come from an external key space.
+    #[deprecated(note = "use insert_child to allocate a generational id")]
+    pub fn insert(&mut self, child_id: impl Into<NodeId>, value: T) -> ArenaMut<'_, T> {
+        let child_id = child_id.into();
+        assert!(
+            !self.parent_arena.parents.contains_key(&child_id),
+            "Key already present"
+        );
+        self.parent_arena.parents.insert(child_id, self.parent_id);
+        self.child_arr.push(child_id);
+        self.parent_arena.items.insert(
+            child_id,
+            Box::new(UnsafeCell::new(TreeNode {
+                item: value,
+                children: Vec::new(),
+            })),
+        );
+        self.parent_arena.find_mut_inner(child_id).unwrap()
+    }
+
     /// Checks if id is a descendant of self
     /// O(depth) and the limiting factor for find methods
     /// not from the root
@@ -550,26 +577,22 @@ impl<'arena, T> ArenaMutList<'arena, T> {
         }
     }
 
-    // TODO - Remove the child_id argument once creation of widgets is figured out.
-    // Return the id instead.
-    // TODO - Add #[must_use]
     /// Insert a child into the tree under the common parent of this list's items.
     ///
     /// If this list was returned from [`TreeArena::roots_mut()`], create a new tree root.
     ///
-    /// The new child will have the given id.
-    ///
-    /// Returns a handle to the new child.
-    ///
-    /// # Panics
-    ///
-    /// If the arena already contains an item with the given id.
-    pub fn insert(&mut self, child_id: impl Into<NodeId>, value: T) -> ArenaMut<'_, T> {
-        let child_id: NodeId = child_id.into();
-        assert!(
-            !self.parent_arena.parents.contains_key(&child_id),
-            "Key already present"
-        );
+    /// The value builder receives the newly allocated id. Returns that id.
+    #[must_use]
+    pub fn insert_child(&mut self, value: impl FnOnce(NodeId) -> T) -> NodeId {
+        let child_id = loop {
+            let key = self.parent_arena.slots.insert(());
+            let id = key.data().as_ffi();
+            if !self.parent_arena.parents.contains_key(&id) {
+                break id;
+            }
+            self.parent_arena.slots.remove(key);
+        };
+        let value = value(child_id);
 
         self.parent_arena.parents.insert(child_id, self.parent_id);
 
@@ -584,7 +607,7 @@ impl<'arena, T> ArenaMutList<'arena, T> {
             .items
             .insert(child_id, Box::new(UnsafeCell::new(node)));
 
-        self.parent_arena.find_mut_inner(child_id).unwrap()
+        child_id
     }
 
     // TODO - How to handle when a subtree is removed?
@@ -608,6 +631,10 @@ impl<'arena, T> ArenaMutList<'arena, T> {
                     remove_children(child_id, data_map);
                 }
                 data_map.parents.remove(&id);
+                let key = DefaultKey::from(slotmap::KeyData::from_ffi(id));
+                if data_map.slots.contains_key(key) {
+                    data_map.slots.remove(key);
+                }
                 node.item
             }
             self.child_arr.retain(|i| *i != child_id);

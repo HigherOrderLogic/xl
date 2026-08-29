@@ -97,6 +97,7 @@ mod tests {
     use crate::imaging::record::{Scene, replay_transformed};
     use kurbo::{Affine, Rect};
     use peniko::Color;
+    use std::num::NonZeroU64;
 
     fn filled_scene(rect: Rect, color: Color) -> Scene {
         let mut scene = Scene::new();
@@ -115,19 +116,19 @@ mod tests {
                 VisualLayer {
                     kind: VisualLayerKind::Scene(root_scene.clone()),
                     transform: Affine::IDENTITY,
-                    widget_id: WidgetId::next(),
+                    widget_id: WidgetId(NonZeroU64::new(1).unwrap()),
                 },
                 VisualLayer {
                     kind: VisualLayerKind::External {
                         bounds: Rect::new(10.0, 0.0, 20.0, 10.0),
                     },
                     transform: Affine::IDENTITY,
-                    widget_id: WidgetId::next(),
+                    widget_id: WidgetId(NonZeroU64::new(2).unwrap()),
                 },
                 VisualLayer {
                     kind: VisualLayerKind::Scene(overlay_scene.clone()),
                     transform: Affine::translate((20.0, 5.0)),
-                    widget_id: WidgetId::next(),
+                    widget_id: WidgetId(NonZeroU64::new(3).unwrap()),
                 },
             ],
         };
@@ -157,19 +158,19 @@ mod tests {
                 VisualLayer {
                     kind: VisualLayerKind::Scene(root_scene),
                     transform: Affine::IDENTITY,
-                    widget_id: WidgetId::next(),
+                    widget_id: WidgetId(NonZeroU64::new(1).unwrap()),
                 },
                 VisualLayer {
                     kind: VisualLayerKind::External {
                         bounds: Rect::new(10.0, 0.0, 20.0, 10.0),
                     },
                     transform: Affine::IDENTITY,
-                    widget_id: WidgetId::next(),
+                    widget_id: WidgetId(NonZeroU64::new(2).unwrap()),
                 },
                 VisualLayer {
                     kind: VisualLayerKind::Scene(overlay_scene),
                     transform: Affine::translate((20.0, 5.0)),
-                    widget_id: WidgetId::next(),
+                    widget_id: WidgetId(NonZeroU64::new(3).unwrap()),
                 },
             ],
         };
