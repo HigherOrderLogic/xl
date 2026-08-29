@@ -325,7 +325,7 @@ impl Widget for Switch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::TextEvent;
+    use crate::core::{TextEvent, WidgetTag};
     use crate::properties::types::{CrossAxisAlignment, MainAxisAlignment};
     use crate::testing::{TestHarness, assert_render_snapshot};
     use crate::theme::test_property_set;
@@ -401,17 +401,18 @@ mod tests {
         // Expected: track_height = max(20, 8*2) = 20, track_width = 20*2 = 40
         // With borders: width = 42, height = 22
         let switch = Switch::new(false).prepare();
-        let switch_id = switch.id();
+        let switch_tag = WidgetTag::unique();
+        let switch = switch.with_tag(switch_tag);
 
         // Wrap in Flex with Start alignment so it doesn't stretch the switch
         let flex = Flex::row()
             .with_fixed(switch)
             .main_axis_alignment(MainAxisAlignment::Start)
             .cross_axis_alignment(CrossAxisAlignment::Start);
-
         // Give it much more space than needed
         let harness =
             TestHarness::create_with_size(test_property_set(), flex.prepare(), (200, 100));
+        let switch_id = harness.get_widget(switch_tag).id();
 
         let size = harness
             .get_widget_with_id(switch_id)

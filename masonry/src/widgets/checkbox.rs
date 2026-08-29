@@ -364,7 +364,7 @@ impl Widget for Checkbox {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{PropertySet, StyleProperty};
+    use crate::core::{PropertySet, StyleProperty, WidgetTag};
     use crate::layout::AsUnit;
     use crate::properties::{ContentColor, Padding};
     use crate::testing::{TestHarness, TestHarnessParams, assert_render_snapshot};
@@ -411,7 +411,8 @@ mod tests {
         use crate::properties::types::MainAxisAlignment;
 
         let checkbox = NewWidget::new(Checkbox::new(true, "Focus test"));
-        let checkbox_id = checkbox.id();
+        let checkbox_tag = WidgetTag::unique();
+        let checkbox = checkbox.with_tag(checkbox_tag);
 
         let root = NewWidget::new(
             Flex::row()
@@ -419,6 +420,7 @@ mod tests {
                 .main_axis_alignment(MainAxisAlignment::Center),
         );
         let mut harness = TestHarness::create_with_size(test_property_set(), root, (120, 40));
+        let checkbox_id = harness.get_widget(checkbox_tag).id();
 
         harness.focus_on(Some(checkbox_id));
         assert_render_snapshot!(harness, "checkbox_focus_focused");
@@ -428,10 +430,10 @@ mod tests {
     fn checkbox_with_padding() {
         let checkbox = NewWidget::new(Checkbox::new(true, "Padding"))
             .with_props(Padding::from_vh(8.px(), 16.px()));
-        let checkbox_id = checkbox.id();
         let params =
             TestHarnessParams::size_and_padding((180, 72), TestHarnessParams::ROOT_PADDING);
         let mut harness = TestHarness::create_with(test_property_set(), checkbox, params);
+        let checkbox_id = harness.root_id();
 
         harness.focus_on(Some(checkbox_id));
         assert_render_snapshot!(harness, "checkbox_with_padding_focused");

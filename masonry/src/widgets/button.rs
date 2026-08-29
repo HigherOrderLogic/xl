@@ -442,11 +442,13 @@ mod tests {
     ///
     /// We validate that each of these actually are correctly supported.
     fn validate_noninteractive_child<W: Widget>(child: NewWidget<W>) {
-        let child_id = child.id();
+        let child_tag = WidgetTag::unique();
+        let child = child.with_tag(child_tag);
         let mut button = Button::new(child).prepare();
         button.properties.insert(Padding::all(10.px()));
-        let button_id = button.id();
         let mut harness = TestHarness::create(test_property_set(), button);
+        let button_id = harness.root_id();
+        let child_id = harness.get_widget(child_tag).id();
 
         harness.mouse_move_to_unchecked(child_id);
         let button = harness.get_widget_with_id(button_id);

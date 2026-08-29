@@ -450,7 +450,8 @@ mod tests {
         use crate::properties::types::MainAxisAlignment;
 
         let radio = NewWidget::new(RadioButton::new(true, "Focus test"));
-        let radio_id = radio.id();
+        let radio_tag = WidgetTag::unique();
+        let radio = radio.with_tag(radio_tag);
         let group = NewWidget::new(RadioGroup::new(radio));
 
         let root = NewWidget::new(
@@ -459,6 +460,7 @@ mod tests {
                 .main_axis_alignment(MainAxisAlignment::Center),
         );
         let mut harness = TestHarness::create_with_size(default_property_set(), root, (120, 40));
+        let radio_id = harness.get_widget(radio_tag).id();
 
         harness.focus_on(Some(radio_id));
         assert_render_snapshot!(harness, "radio_button_focus_focused");
